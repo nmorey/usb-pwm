@@ -1,4 +1,4 @@
-# spec file for package usb-pwm-hwmon
+# spec file for package usb-pwm
 #
 # Copyright (c) 2026 Nathan Morey
 #
@@ -11,7 +11,7 @@
 %define         git_ver ${nil}
 
 Name:           usb-pwm
-Version:        1.0
+Version:        0.1
 Release:        0
 Summary:        USB HWMON Fan PWM Controller Kernel Module
 License:        GPL-2.0-only
@@ -21,7 +21,7 @@ Source0:        %{name}-%{version}%{?git_ver}.tar.gz
 BuildRequires:  %kernel_module_package_buildreqs
 BuildRoot:      %{_tmppath}/%{name}-%{version}-build
 
-# Generates the KMP subpackages (e.g. usb-pwm-hwmon-kmp-default)
+# Generates the KMP subpackages
 %kernel_module_package
 
 %description
@@ -32,13 +32,17 @@ for PC fan control and monitoring.
 
 %prep
 %setup -q -n  %{name}-%{version}%{?git_ver}
+set -- *
+mkdir source
+mv "$@" source/
+mkdir obj
 
 %build
 # Build the module for each active kernel flavor
 for flavor in %flavors_to_build; do
     rm -rf obj/$flavor
     cp -r source obj/$flavor
-    make -C %{kernel_source $flavor} modules M=$PWD/obj/$flavor
+    %{__make} -C %{kernel_source $flavor} %{?linux_make_arch} modules M=$PWD/obj/$flavor
 done
 
 %install
@@ -46,8 +50,17 @@ done
 export INSTALL_MOD_PATH=%{buildroot}
 export INSTALL_MOD_DIR=updates
 for flavor in %flavors_to_build; do
-    make -C %{kernel_source $flavor} modules_install M=$PWD/obj/$flavor
+    %{__make} -C %{kernel_source $flavor} M=$PWD/obj/$flavor modules_install
 done
+
+mkdir -p %{buildroot}%{_prefix}/lib/modules-load.d/
+cat <<EOF >%{buildroot}%{_prefix}/lib/modules-load.d/%{name}.conf
+usb-pwm-hwmon
+EOF
+
+%files load
+%dir %{_prefix}/lib/modules-load.d
+%{_prefix}/lib/modules-load.d/%{name}.conf
 
 %clean
 rm -rf %{buildroot}
