@@ -111,7 +111,7 @@ void process_command(char* cmd) {
         Serial.print(fan1_rpm);
     } 
     else if (strncmp(cmd, set_cmd, strlen(set_cmd)) == 0) {
-	    int val = atoi(cmd + strlen(set_cmd));
+	int val = atoi(cmd + strlen(set_cmd));
         if (val >= 0 && val <= 255) {
             pwm1_val = val;
             fan1_pwm.pulse_perc(pwm_to_percent(pwm1_val));
