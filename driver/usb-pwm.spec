@@ -35,6 +35,7 @@ Summary:        USB HWMON Fan PWM Controller Kernel Module
 Group:          System/Kernel
 Requires:       %{name}-kmp = %{version}
 BuildArch:      noarch
+%description load
 This package contains the out-of-tree Linux kernel driver for the USB PWM
 Fan Controller (Arduino Nano R4). It registers with the hwmon subsystem
 to expose standard sysfs interfaces (fan1_input, fan2_input, pwm1, pwm2)
