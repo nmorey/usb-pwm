@@ -26,7 +26,7 @@ volatile unsigned long fan1_pulses = 0;
 unsigned int fan1_rpm = 0;
 
 // PWM cache values (0-255)
-int pwm1_val = 255;
+int pwm1_val = 96;
 
 // Timing tracking
 unsigned long last_rpm_update = 0;
