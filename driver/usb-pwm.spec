@@ -43,9 +43,8 @@ for PC fan control and monitoring.
 
 %prep
 %setup -q -n  %{name}-%{version}%{?git_ver}
-set -- *
 mkdir source
-mv "$@" source/
+mv driver/* source/
 mkdir obj
 
 %build
