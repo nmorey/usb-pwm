@@ -18,15 +18,16 @@
 #include <linux/mutex.h>
 #include <linux/jiffies.h>
 
+#define USB_PWM_N_FANS      1 // More than 1 is not supported by firmware for now
 #define USB_PWM_VENDOR_ID   0x2341
-#define USB_PWM_PRODUCT_ID  0x0074
+#define USB_PWM_PRODUCT_ID  0x0074  // Nano R4
 
 /* Private driver state and data */
 struct usb_pwm_priv {
     struct usb_device *udev;
     struct device *hwmon_dev;
     struct mutex lock; /* Mutex protecting concurrent USB communication */
-    
+
     __u8 bulk_in_endpointAddr;
     __u8 bulk_out_endpointAddr;
     size_t bulk_in_size;
@@ -34,9 +35,9 @@ struct usb_pwm_priv {
 
     unsigned long last_update; /* Time of last RPM update (jiffies) */
     bool cache_valid;
-    
-    long fan_rpm[2];
-    long pwm_duty[2];
+
+    long fan_rpm[USB_PWM_N_FANS];
+    long pwm_duty[USB_PWM_N_FANS];
 };
 
 /* Device ID table for USB core matching */
@@ -50,11 +51,13 @@ MODULE_DEVICE_TABLE(usb, usb_pwm_table);
  * Sends a command to the USB device and reads back the response.
  * Synchronous and blocking. Must NOT be called from interrupt context.
  */
-static int usb_pwm_send_cmd_recv_resp(struct usb_pwm_priv *priv, const char *cmd, char *resp, size_t resp_max_len)
+static int usb_pwm_send_cmd_recv_resp(struct usb_pwm_priv *priv, const char *cmd,
+				      char *resp, size_t resp_max_len)
 {
     int retval;
     int actual_length;
     char *buf;
+    unsigned timeout = 200; /* 200 ms timeout */
 
     /* Buffer passed to usb_bulk_msg MUST be dynamically allocated and DMA-safe */
     buf = kmalloc(64, GFP_KERNEL);
@@ -77,21 +80,43 @@ static int usb_pwm_send_cmd_recv_resp(struct usb_pwm_priv *priv, const char *cmd
         return retval;
     }
 
-    /* Read response from Bulk IN endpoint */
+    /* Read response from Bulk IN endpoint, looping to ensure we consume the entire message/line */
     memset(buf, 0, 64);
-    retval = usb_bulk_msg(priv->udev,
-                          usb_rcvbulkpipe(priv->udev, priv->bulk_in_endpointAddr),
-                          buf,
-                          63, /* Keep 1 byte for null terminator */
-                          &actual_length,
-                          1000); /* 1000 ms timeout */
-    if (retval < 0) {
-        dev_err(&priv->udev->dev, "Bulk read failed: %d\n", retval);
-        kfree(buf);
-        return retval;
-    }
+    actual_length = 0;
+    while (actual_length < 63) {
+        int len = 0;
+        retval = usb_bulk_msg(priv->udev,
+                              usb_rcvbulkpipe(priv->udev, priv->bulk_in_endpointAddr),
+                              buf + actual_length,
+                              63 - actual_length,
+                              &len,
+                              timeout);
+	// We just want to flush following stuff so le'ts recude the timeout
+	timeout = 10;
 
-    buf[actual_length] = '\0';
+	if (retval < 0) {
+            /* If we already received some data, return what we have
+	     * (e.g. if device didn't terminate with newline but timed out) */
+            if (actual_length > 0 && retval == -ETIMEDOUT) {
+		/* We kind of hit timeout all the time due to not getting \n so just ignore silently */
+                break;
+            }
+            dev_err(&priv->udev->dev, "Bulk read failed: %d\n", retval);
+            kfree(buf);
+            return retval;
+        }
+        if (len == 0) {
+            /* No data read and no error? Break to avoid infinite loop */
+            break;
+        }
+        actual_length += len;
+        buf[actual_length] = '\0';
+
+        /* If we found a newline or carriage return, we have read a complete response line */
+        if (strchr(buf, '\n') || strchr(buf, '\r')) {
+            break;
+        }
+    }
     snprintf(resp, resp_max_len, "%s", buf);
 
     kfree(buf);
@@ -106,7 +131,7 @@ static int usb_pwm_update_cache(struct usb_pwm_priv *priv)
 {
     int ret = 0;
     char resp[64];
-    unsigned int r1 = 0, r2 = 0;
+    unsigned int r1 = 0;
 
     mutex_lock(&priv->lock);
 
@@ -122,9 +147,8 @@ static int usb_pwm_update_cache(struct usb_pwm_priv *priv)
     }
 
     /* Parse response format "RPM1 %u RPM2 %u" */
-    if (sscanf(resp, "RPM1 %u RPM2 %u", &r1, &r2) == 2) {
+    if (sscanf(resp, "%u", &r1) == 1) {
         priv->fan_rpm[0] = r1;
-        priv->fan_rpm[1] = r2;
         priv->last_update = jiffies;
         priv->cache_valid = true;
         ret = 0;
@@ -145,7 +169,7 @@ static int usb_pwm_read(struct device *dev, enum hwmon_sensor_types type,
     struct usb_pwm_priv *priv = dev_get_drvdata(dev);
     int err;
 
-    if (channel < 0 || channel > 1)
+    if (channel < 0 || channel >= USB_PWM_N_FANS)
         return -EINVAL;
 
     switch (type) {
@@ -187,7 +211,7 @@ static int usb_pwm_write(struct device *dev, enum hwmon_sensor_types type,
     char resp[16];
     int ret;
 
-    if (channel < 0 || channel > 1)
+    if (channel < 0 || channel >= USB_PWM_N_FANS)
         return -EINVAL;
 
     if (type != hwmon_pwm)
@@ -198,11 +222,11 @@ static int usb_pwm_write(struct device *dev, enum hwmon_sensor_types type,
             return -EINVAL;
 
         mutex_lock(&priv->lock);
-        
-        /* Format and send command: "SET PWM1 <val>\n" or "SET PWM2 <val>\n" */
-        snprintf(cmd, sizeof(cmd), "SET PWM%d %ld\n", channel + 1, val);
+
+        /* Format and send command: "SET PWM <val>\n" */
+        snprintf(cmd, sizeof(cmd), "SET PWM %ld\n", val);
         ret = usb_pwm_send_cmd_recv_resp(priv, cmd, resp, sizeof(resp));
-        
+
         if (ret == 0) {
             /* Defensive match: Check if device confirmed receipt with "OK" */
             if (strncmp(resp, "OK", 2) == 0) {
@@ -212,11 +236,10 @@ static int usb_pwm_write(struct device *dev, enum hwmon_sensor_types type,
                 ret = -EIO;
             }
         }
-        
+
         mutex_unlock(&priv->lock);
         return ret;
-    } 
-    else if (attr == hwmon_pwm_enable) {
+    } else if (attr == hwmon_pwm_enable) {
         if (val != 1) {
             dev_warn(&priv->udev->dev, "Only manual control mode (1) is supported\n");
             return -EINVAL;
@@ -231,7 +254,7 @@ static int usb_pwm_write(struct device *dev, enum hwmon_sensor_types type,
 static umode_t usb_pwm_is_visible(const void *data, enum hwmon_sensor_types type,
                                   u32 attr, int channel)
 {
-    if (channel < 0 || channel > 1)
+    if (channel < 0 || channel >= USB_PWM_N_FANS)
         return 0;
 
     switch (type) {
@@ -259,14 +282,12 @@ static const struct hwmon_ops usb_pwm_hwmon_ops = {
 };
 
 static const u32 usb_pwm_fan_config[] = {
-    HWMON_F_INPUT,
-    HWMON_F_INPUT,
+    [0 ... USB_PWM_N_FANS - 1 ] = HWMON_F_INPUT,
     0
 };
 
 static const u32 usb_pwm_pwm_config[] = {
-    HWMON_P_INPUT | HWMON_P_ENABLE,
-    HWMON_P_INPUT | HWMON_P_ENABLE,
+    [0 ... USB_PWM_N_FANS - 1 ] = HWMON_P_INPUT | HWMON_P_ENABLE,
     0
 };
 
@@ -274,11 +295,19 @@ static const struct hwmon_channel_info usb_pwm_fan_info = {
     .type = hwmon_fan,
     .config = usb_pwm_fan_config,
 };
+// Make sure no more hwmon fans than actual fans
+_Static_assert(sizeof(usb_pwm_fan_config) / sizeof(usb_pwm_fan_config[0]) ==
+	       sizeof(((struct usb_pwm_priv *)0)->fan_rpm) / 
+	       sizeof(((struct usb_pwm_priv *)0)->fan_rpm[0]) + 1);
 
 static const struct hwmon_channel_info usb_pwm_pwm_info = {
     .type = hwmon_pwm,
     .config = usb_pwm_pwm_config,
 };
+// Make sure no more hwmon pwm than actual fans
+_Static_assert(sizeof(usb_pwm_fan_config) / sizeof(usb_pwm_fan_config[0]) ==
+	       sizeof(((struct usb_pwm_priv *)0)->fan_rpm) / 
+	       sizeof(((struct usb_pwm_priv *)0)->fan_rpm[0]) + 1);
 
 static const struct hwmon_channel_info *const usb_pwm_channel_info[] = {
     &usb_pwm_fan_info,
@@ -353,6 +382,21 @@ static int usb_pwm_probe(struct usb_interface *interface, const struct usb_devic
     priv->pwm_duty[0] = 255; /* Default to 100% duty cycle */
     priv->pwm_duty[1] = 255;
     priv->cache_valid = false;
+
+    /* Assert DTR/RTS to tell the Arduino's CDC ACM stack that we are ready to communicate */
+    retval = usb_control_msg(priv->udev,
+                             usb_sndctrlpipe(priv->udev, 0),
+                             0x22, /* SET_CONTROL_LINE_STATE */
+                             0x21, /* USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE */
+                             0x03, /* DTR (0x01) | RTS (0x02) */
+                             0,    /* Control Interface 0 */
+                             NULL, 0,
+                             1000);
+    if (retval < 0) {
+        dev_warn(dev, "USB PWM: Failed to set control line state (DTR/RTS): %d\n", retval);
+    } else {
+        dev_info(dev, "USB PWM: Asserted DTR/RTS (control line state set successfully)\n");
+    }
 
     /* Register device into the Linux hwmon subsystem */
     priv->hwmon_dev = devm_hwmon_device_register_with_info(dev,
