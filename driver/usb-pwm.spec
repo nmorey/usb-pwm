@@ -8,14 +8,16 @@
 # file, is the same license as for the pristine package itself.
 
 # norootforbuild
-Name:           usb-pwm-hwmon
+%define         git_ver ${nil}
+
+Name:           usb-pwm
 Version:        1.0
 Release:        0
 Summary:        USB HWMON Fan PWM Controller Kernel Module
 License:        GPL-2.0-only
 Group:          System/Kernel
 URL:            https://github.com/nmorey/usb-pwm
-Source0:        %{name}-%{version}.tar.gz
+Source0:        %{name}-%{version}%{?git_ver}.tar.gz
 BuildRequires:  %kernel_module_package_buildreqs
 BuildRoot:      %{_tmppath}/%{name}-%{version}-build
 
@@ -29,11 +31,7 @@ to expose standard sysfs interfaces (fan1_input, fan2_input, pwm1, pwm2)
 for PC fan control and monitoring.
 
 %prep
-%setup -q
-# Set up the source directory structure for multi-flavor parallel builds
-mkdir source
-cp -r * source/ 2>/dev/null || :
-mkdir obj
+%setup -q -n  %{name}-%{version}%{?git_ver}
 
 %build
 # Build the module for each active kernel flavor
@@ -55,5 +53,3 @@ done
 rm -rf %{buildroot}
 
 %changelog
-* Thu Sep 03 2026 Nathan Morey <nmorey@example.com> - 1.0-0
-- Initial release of the openSUSE KMP spec file.
