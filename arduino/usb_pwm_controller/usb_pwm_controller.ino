@@ -121,7 +121,6 @@ void process_command(char* cmd) {
         }
     } 
     else {
-	Serial.println(cmd);
         Serial.println("ERR_UNKNOWN_CMD");
     }
 }
