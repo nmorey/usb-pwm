@@ -67,10 +67,22 @@ mkdir -p %{buildroot}%{_prefix}/lib/modules-load.d/
 cat <<EOF >%{buildroot}%{_prefix}/lib/modules-load.d/%{name}.conf
 usb-pwm-hwmon
 EOF
+mkdir -p %{buildroot}%{_udevrulesdir}
+cat << 'EOF' > %{buildroot}%{_udevrulesdir}/70-usb-pwm.rules
+# Ensure the usb_pwm_hwmon module is loaded before we attempt to bind to it
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0074", ACTION=="add", RUN+="/sbin/modprobe usb_pwm_hwmon"
+
+# 1. Unbind Interface 0 from cdc_acm and explicitly bind it to usb_pwm_hwmon
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0074", ENV{INTERFACE}=="2/2/2", ACTION=="add", RUN+="/bin/sh -c 'echo %k > /sys/bus/usb/drivers/cdc_acm/unbind 2> /dev/null; echo %k > /sys/bus/usb/drivers/usb_pwm_hwmon/bind 2> /dev/null'"
+
+# 2. Unbind Interface 1 from cdc_acm and explicitly bind it to usb_pwm_hwmon
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0074", ENV{INTERFACE}=="10/0/0", ACTION=="add", RUN+="/bin/sh -c 'echo %k > /sys/bus/usb/drivers/cdc_acm/unbind  2> /dev/null; echo %k > /sys/bus/usb/drivers/usb_pwm_hwmon/bind 2> /dev/null'"
+EOF
 
 %files load
 %dir %{_prefix}/lib/modules-load.d
 %{_prefix}/lib/modules-load.d/%{name}.conf
+%{_udevrulesdir}/70-usb-pwm.rules
 
 %clean
 rm -rf %{buildroot}
