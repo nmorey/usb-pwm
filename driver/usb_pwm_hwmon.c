@@ -19,7 +19,7 @@
 #include <linux/jiffies.h>
 
 #define USB_PWM_VENDOR_ID   0x2341
-#define USB_PWM_PRODUCT_ID  0x0063
+#define USB_PWM_PRODUCT_ID  0x0074
 
 /* Private driver state and data */
 struct usb_pwm_priv {
